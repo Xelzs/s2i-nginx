@@ -1,0 +1,131 @@
+#!/bin/bash -e
+#
+# S2I assemble script for the 's2i-nginx' image.
+# The 'assemble' script builds your application source so that it is ready to run.
+#
+# For more information refer to the documentation:
+#   https://github.com/openshift/source-to-image/blob/master/docs/builder_image.md
+#
+
+if [[ "$1" == "-h" ]]; then
+    # If the 's2i-nginx' assemble script is executed with '-h' flag,
+    # print the usage.
+    exec /usr/libexec/s2i/usage
+fi
+
+NGINX_STATIC_DIR=${NGINX_STATIC_DIR-html}
+NGINX_CONF_FILE=${NGINX_CONF_FILE-nginx.conf}
+NGINX_CONF_DIR=${NGINX_CONF_DIR-conf.d}
+NGINX_AUX_DIR=${NGINX_AUX_DIR-aux}
+
+envsubst_config() {
+  export DOLAR='$'
+  if ls /opt/app-root/etc/nginx.conf.d/*.tmpl > /dev/null 2>&1 ; then
+    echo "---> substituting environment variables in templates"
+    for file in /opt/app-root/etc/nginx.conf.d/*.tmpl; do
+      target_file="/opt/app-root/etc/nginx.conf.d/$(basename "$file" .tmpl)"
+      if [ -f "$target_file" ]; then
+        echo "Not substituting file $file because $target_file already exists!"
+      else
+        envsubst < "$file" > "$target_file"
+      fi
+    done
+  fi
+}
+
+# Restore artifacts from the previous build (if they exist).
+#
+restore_build_artifacts() {
+    if [ "$(ls /tmp/artifacts/ 2>/dev/null)" ]; then
+      echo "---> Restoring build artifacts..."
+      mv /tmp/artifacts/. ./
+    fi
+}
+
+copy_static_files() {
+    echo "---> Copying static files"
+    if [ -d /tmp/src/"${NGINX_STATIC_DIR}" ]; then
+        cp -Rf /tmp/src/"${NGINX_STATIC_DIR}"/. ./html
+    else
+        mkdir ./html
+    fi
+}
+
+copy_server_configs() {
+    echo "---> Copying nginx config"
+    if [ -n "${NGINX_CONF_FILE}" -a -f /tmp/src/"${NGINX_CONF_FILE}" ]; then
+        echo -e "---> Copying nginx config file ${NGINX_CONF_FILE}"
+        cp /tmp/src/"${NGINX_CONF_FILE}" /opt/app-root/etc/nginx.conf
+    fi
+    if [ -n "${NGINX_CONF_DIR}" -a -d /tmp/src/"${NGINX_CONF_DIR}" ]; then
+        echo -e "---> Copying files from config dir ${NGINX_CONF_DIR}"
+        cp -Rf /tmp/src/"${NGINX_CONF_DIR}"/. /opt/app-root/etc/nginx.conf.d
+    fi
+    if [ -n "${NGINX_CONF_DIR}" -a -d /tmp/src/"${NGINX_CONF_DIR}" ]; then
+        echo -e "---> Copying files from config dir ${NGINX_CONF_DIR}"
+        cp -Rf /tmp/src/"${NGINX_CONF_DIR}"/. /opt/app-root/etc/nginx.conf.d
+    fi
+}
+
+copy_aux_dir() {
+    if [ -d /tmp/src/"${NGINX_AUX_DIR}" ]; then
+        echo "---> Copying auxiliary files"
+        mkdir /opt/app-root/etc/aux
+        cp -Rf /tmp/src/"${NGINX_AUX_DIR}"/. /opt/app-root/etc/aux
+    fi
+}
+
+test_config() {
+    envsubst_config
+
+    # disabling the testing of the config at assemble time because the
+    # the network resources are not available in a seperate OpenShift project
+    # for building
+    #
+    #echo "---> testing config"
+    #if ! $NGINX_BASE_DIR/nginx -c /opt/app-root/etc/nginx.conf -t ; then
+    #    echo "nginx configuration not valid."
+    #    echo
+    #    for f in /opt/app-root/etc/nginx.conf.d/*; do
+    #        echo "==> $f <=="
+    #        cat $f
+    #    done
+    #    exit 1
+    #fi
+}
+
+npm_build() {
+  echo "---> begin NPM build process"
+  echo "---> npm version: "
+  npm --version
+  echo "---> node version: "
+  node --version
+  # run npm install to get dependencies
+  cd /tmp/src
+  echo "---> start npm install"
+  npm install
+  # run the build process
+  echo "---> start npm run build"
+  npm run build
+
+  # copy built software to static folder
+  echo "---> coping from build output: "
+  ls -al /opt/app-root/src/html
+  echo "---> to /opt/app-root/src/html (nginx home directory): "
+  cp -Rf /tmp/src/dist/* /opt/app-root/src/html
+  ls -al /opt/app-root/src/html
+}
+
+cleanup() {
+    echo "---> cleanup"
+    rm -f /opt/app-root/run/nginx.pid $NGINX_VAR_DIR/log/nginx/error.log
+    chmod a+rwx /opt/app-root/etc/nginx.conf.d
+}
+
+restore_build_artifacts
+copy_static_files
+copy_server_configs
+copy_aux_dir
+test_config
+npm_build
+cleanup

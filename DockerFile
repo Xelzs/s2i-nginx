@@ -1,0 +1,58 @@
+FROM node:alpine3.10
+
+# S2I Environment variables
+ENV STI_SCRIPTS_PATH=/usr/libexec/s2i \
+  APP_ROOT=/opt/app-root \
+  HOME=/opt/app-root/src \
+  PATH=$HOME/bin:$APP_ROOT/bin:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:$HOME/node_modules/.bin/:$PATH \
+  NGINX_BASE_DIR=/usr/sbin \
+  NGINX_VAR_DIR=/var \
+  BUILDER_VERSION=1.0
+
+LABEL io.k8s.description="Nginx static file server and reverse proxy for web apps that build via npm" \
+  io.k8s.display-name="Nginx / Npm builder ${BUILDER_VERSION}" \
+  io.openshift.expose-services="8080:http" \
+  io.openshift.tags="nginx,npm,node,webserver,builder" \
+  io.openshift.s2i.scripts-url="image://$STI_SCRIPTS_PATH" \
+  io.s2i.scripts-url="image://$STI_SCRIPTS_PATH" \
+  name="s2i-nginx"
+
+# Prepare directories
+RUN mkdir -p $APP_ROOT && \
+  mkdir -p $HOME && \
+  mkdir -p $STI_SCRIPTS_PATH
+
+WORKDIR ${HOME}
+
+RUN adduser -u 1001 -S -G root -h ${HOME} -s /sbin/nologin default && \
+  chown -R 1001:1001 $APP_ROOT && \
+  chown -R 1001:1001 $STI_SCRIPTS_PATH
+
+ENV BASH_ENV=$APP_ROOT/etc/scl_enable \
+  ENV=$APP_ROOT/etc/scl_enable \
+  PROMPT_COMMAND=". $APP_ROOT/etc/scl_enable"
+
+# Install dependencies
+RUN apk update && apk upgrade && apk add --no-cache \
+  bash curl ca-certificates openssl tar unzip git nginx && \
+  rm -rf /var/cache/apk/*
+
+RUN mkdir -p $APP_ROOT/etc/nginx.conf.d $APP_ROOT/run $NGINX_VAR_DIR/cache/nginx && \ 
+  chmod -R a+rx  $NGINX_VAR_DIR/lib/nginx && \
+  chmod -R a+rwX $NGINX_VAR_DIR/lib/nginx/tmp \
+  $NGINX_VAR_DIR/log/nginx \
+  $NGINX_VAR_DIR/run \
+  $NGINX_VAR_DIR/cache/nginx \
+  $APP_ROOT/run
+
+# Copy scripts
+COPY ./etc/ $APP_ROOT/etc
+COPY ./s2i/bin/ $STI_SCRIPTS_PATH
+
+RUN chown -R 1001:1001 $APP_ROOT
+
+EXPOSE 8080
+
+USER 1001
+
+CMD $STI_SCRIPTS_PATH/usage
